@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <string.h>
 
+#define KERNEL_BS 8
 #define BS 8
 
 typedef struct {
@@ -87,10 +88,91 @@ int read_png(const char* filename, ImageData* imageData) {
     return 0;
 }
 
-__device__ void rgb_to_yuv(float R[][BS], float G[][BS], float B[][BS], int i, int j) {
-    R[i][j] = 0.299   * R[i][j] + 0.587  * G[i][j] + 0.114  * B[i][j];
-    G[i][j] = -0.1687 * R[i][j] - 0.3313 * G[i][j] + 0.5    * B[i][j] + 128;
-    B[i][j] = 0.5     * R[i][j] - 0.4187 * G[i][j] - 0.0813 * B[i][j] + 128;
+__constant__ float cos_lookup[8][8] = {
+    {0.707107, 0.980785, 0.923880, 0.831470, 0.707107, 0.555570, 0.382683, 0.195090},
+    {0.707107, 0.831470, 0.382683, -0.195090, -0.707107, -0.980785, -0.923880, -0.555570},
+    {0.707107, 0.555570, -0.382683, -0.980785, -0.707107, 0.195090, 0.923880, 0.831470},
+    {0.707107, 0.195090, -0.923880, -0.555570, 0.707107, 0.831470, -0.382683, -0.980785},
+    {0.707107, -0.195090, -0.923880, 0.555570, 0.707107, -0.831470, -0.382683, 0.980785},
+    {0.707107, -0.555570, -0.382683, 0.980785, -0.707107, -0.195090, 0.923880, -0.831470},
+    {0.707107, -0.831470, 0.382683, 0.195090, -0.707107, 0.980785, -0.923880, 0.555570},
+    {0.707107, -0.980785, 0.923880, -0.831470, 0.707107, -0.555570, 0.382683, -0.195}
+};
+
+__constant__ float qy[8][8] = {{16, 11, 10, 16, 24, 40, 51, 61},
+                  {12, 12, 14, 19, 26, 58, 60, 55},
+                  {14, 13, 16, 24, 40, 57, 69, 56},
+                  {14, 17, 22, 29, 51, 87, 80, 82},
+                  {18, 22, 37, 56, 68, 109, 103, 77},
+                  {24, 35, 55, 64, 81, 104, 113, 92},
+                  {99, 64, 78, 87, 103, 121, 120, 101},
+                  {72, 92, 95, 98, 112, 100, 103, 99}};
+__constant__ float quv[8][8] = {{17, 18, 24, 47, 99, 99, 99, 99},
+                  {18, 21, 26, 66, 99, 99, 99, 99},
+                  {24, 26, 56, 99, 99, 99, 99, 99},
+                  {47, 66, 99, 99, 99, 99, 99, 99},
+                  {99, 99, 99, 99, 99, 99, 99, 99},
+                  {99, 99, 99, 99, 99, 99, 99, 99},
+                  {99, 99, 99, 99, 99, 99, 99, 99},
+                  {99, 99, 99, 99, 99, 99, 99, 99}};
+
+__device__ void rgb_to_yuv(float R[][KERNEL_BS], float G[][KERNEL_BS], float B[][KERNEL_BS], int i, int j) {
+    int newR = 0.299   * R[i][j] + 0.587  * G[i][j] + 0.114  * B[i][j];
+    int newG = -0.1687 * R[i][j] - 0.3313 * G[i][j] + 0.5    * B[i][j] + 128;
+    int newB = 0.5     * R[i][j] - 0.4187 * G[i][j] - 0.0813 * B[i][j] + 128;
+    R[i][j] = newR;
+    G[i][j] = newG;
+    B[i][j] = newB;
+}
+
+__device__ void dct(float A[][KERNEL_BS], int i, int j) {
+    int x, y;
+    float tmp = 0;
+    for (x = 0; x < KERNEL_BS; x++) {
+        for (y = 0; y < KERNEL_BS; y++) {
+            tmp += 0.25;
+            // tmp += 0.25 * A[y][x] * cos_lookup[x%BS][i%BS] * cos_lookup[y%BS][j%BS];
+        }
+    }
+    __syncthreads();
+    A[j][i] = tmp;
+}
+
+__device__ void quantize_y(float A[][KERNEL_BS], int i, int j) {
+    A[i][j] = round(A[i][j] / qy[i%BS][j%BS]);
+}
+
+__device__ void quantize_uv(float A[][KERNEL_BS], int i, int j) {
+    A[i][j] = round(A[i][j] / quv[i%BS][j%BS]);
+}
+
+__device__ void yuv_to_rgb(float R[][KERNEL_BS], float G[][KERNEL_BS], float B[][KERNEL_BS], int i, int j) {
+    int newR = R[i][j] + 1.402 * (B[i][j] - 128);
+    int newG = R[i][j] - 0.34414 * (G[i][j] - 128) - 0.71414 * (B[i][j] - 128);
+    int newB = R[i][j] + 1.772 * (G[i][j] - 128);
+    R[i][j] = newR;
+    G[i][j] = newG;
+    B[i][j] = newB;
+}
+
+__device__ void inv_dct(float A[][KERNEL_BS], int i, int j) {
+    int x, y;
+    int tmp = 0;
+    for (x = 0; x < KERNEL_BS; x++) {
+        for (y = 0; y < KERNEL_BS; y++) {
+            tmp += 0.25 * A[y][x] * cos_lookup[i%BS][x%BS] * cos_lookup[j%BS][y%BS];
+        }
+    }
+    __syncthreads();
+    A[j][i] = tmp;
+}
+
+__device__ void dequantize_y(float A[][KERNEL_BS], int i, int j) {
+    A[i][j] = round(A[i][j] / qy[i%BS][j%BS]);
+}
+
+__device__ void dequantize_uv(float A[][KERNEL_BS], int i, int j) {
+    A[i][j] = round(A[i][j] / quv[i%BS][j%BS]);
 }
 
 __global__ void compress(float* r, float* g, float* b, int width) {
@@ -99,103 +181,66 @@ __global__ void compress(float* r, float* g, float* b, int width) {
     // int roundX = imageData->width/8;
     // int roundY = imageData->height/8;
     
-    __shared__ float R[BS][BS];
-    __shared__ float G[BS][BS];
-    __shared__ float B[BS][BS];
+    __shared__ float R[KERNEL_BS][KERNEL_BS];
+    __shared__ float G[KERNEL_BS][KERNEL_BS];
+    __shared__ float B[KERNEL_BS][KERNEL_BS];
     int bidx = blockIdx.x;
     int bidy = blockIdx.y;
     int ti = threadIdx.y;
     int tj = threadIdx.x;
-    R[ti][tj] = r[width*(bidy*BS+ti) + bidx*BS+tj];
-    G[ti][tj] = g[width*(bidy*BS+ti) + bidx*BS+tj];
-    B[ti][tj] = b[width*(bidy*BS+ti) + bidx*BS+tj];
+    R[ti][tj] = r[width*(bidy*KERNEL_BS+ti) + bidx*KERNEL_BS+tj];
+    G[ti][tj] = g[width*(bidy*KERNEL_BS+ti) + bidx*KERNEL_BS+tj];
+    B[ti][tj] = b[width*(bidy*KERNEL_BS+ti) + bidx*KERNEL_BS+tj];
     rgb_to_yuv(R, G, B, ti, tj);
-    dct(r_out, r_in);
-    dct(g_out, g_in);
-    dct(b_out, b_in);
+    dct(R, ti, tj);
+    dct(G, ti, tj);
+    dct(B, ti, tj);
+    // quantize_y(R, ti, tj);
+    // quantize_uv(G, ti, tj);
+    // quantize_uv(B, ti, tj);
 
-    r[width*(bidy*BS+ti) + bidx*BS+tj] = R[ti][tj];
-    g[width*(bidy*BS+ti) + bidx*BS+tj] = G[ti][tj];
-    b[width*(bidy*BS+ti) + bidx*BS+tj] = B[ti][tj];
-    // for (int i=0; i<roundY; ++i) {
-    //     for (int j=0; j<roundX; ++j) {
-    //         // Deal with 8*8 matrix
-    //         float r_in[8][8], g_in[8][8], b_in[8][8];
-    //         float r_out[8][8], g_out[8][8], b_out[8][8];
-    //         for (int x=0; x<8; ++x) {
-    //             for (int y=0; y<8; ++y) {
-    //                 r_in[x][y] = image_r[i*8+x][j*8+y];
-    //                 g_in[x][y] = image_g[i*8+x][j*8+y];
-    //                 b_in[x][y] = image_b[i*8+x][j*8+y];
-    //             }
-    //         }
-    //         // printf("1. Convert to YUV space...\n");
-    //         rgb_to_yuv(r_in, g_in, b_in, r_out, g_out, b_out);
+    
+    // dequantize_y(R, ti, tj);
+    // dequantize_uv(G, ti, tj);
+    // dequantize_uv(B, ti, tj);
 
-    //         // printf("2. DCT...\n");
-    //         dct(r_out, r_in);
-    //         dct(g_out, g_in);
-    //         dct(b_out, b_in);
+    // inv_dct(R, ti, tj);
+    // inv_dct(G, ti, tj);
+    // inv_dct(B, ti, tj);
 
-    //         // printf("3. Quantization...\n");
-    //         quantize(r_in, r_out, 0);
-    //         quantize(g_in, g_out, 1);
-    //         quantize(b_in, b_out, 1);
+    // yuv_to_rgb(R, G, B, ti, tj);
 
-    //         if (i == 10 && j == 10) {
-    //             printf("Check Compress Data:\n");
-    //             for (int x=0; x<8; ++x) {
-    //                 for (int y=0; y<8; ++y) {
-    //                     printf("%6.1f ", r_out[x][y]);
-    //                 }
-    //                 printf("\t");
-    //                 for (int y=0; y<8; ++y) {
-    //                     printf("%6.1f ", g_out[x][y]);
-    //                 }
-    //                 printf("\t");
-    //                 for (int y=0; y<8; ++y) {
-    //                     printf("%6.1f ", b_out[x][y]);
-    //                 }
-    //                 printf("\n");
-    //             }
-    //         }
-
-    //         // printf("4. Dequantization...\n");
-    //         dequantize(r_out, r_in, 0);
-    //         dequantize(g_out, g_in, 1);
-    //         dequantize(b_out, b_in, 1);
-
-    //         // printf("5. Inv DCT...\n");
-    //         inv_dct(r_in, r_out);
-    //         inv_dct(g_in, g_out);
-    //         inv_dct(b_in, b_out);
-
-    //         // printf("6. Convert to RGB space...\n");
-    //         yuv_to_rgb(r_out, g_out, b_out, r_in, g_in, b_in);
-
-    //         for (int x=0; x<8; ++x) {
-    //             for (int y=0; y<8; ++y) {
-    //                 image_r[i*8+x][j*8+y] = r_in[x][y];
-    //                 image_g[i*8+x][j*8+y] = g_in[x][y];
-    //                 image_b[i*8+x][j*8+y] = b_in[x][y];
-    //             }
-    //         }
-    //     }
-    // }
+    r[width*(bidy*KERNEL_BS+ti) + bidx*KERNEL_BS+tj] = R[ti][tj];
+    g[width*(bidy*KERNEL_BS+ti) + bidx*KERNEL_BS+tj] = G[ti][tj];
+    b[width*(bidy*KERNEL_BS+ti) + bidx*KERNEL_BS+tj] = B[ti][tj];
 }
 
+using namespace std;
+
 void imageProcessing_BlockByBlock(ImageData* imageData) {
-    // Allocate 2D Array
-    float *h_r = new float[imageData->width * imageData->height];
-    float *h_g = new float[imageData->width * imageData->height];
-    float *h_b = new float[imageData->width * imageData->height];
+    
+    const int padWidth = ((imageData->width+BS-1)/KERNEL_BS)*KERNEL_BS;
+    const int padHeight = ((imageData->height+BS-1)/KERNEL_BS)*KERNEL_BS;
+
+    cout << padWidth << ", " << padHeight << ", " << imageData->channels << endl;
+
+    float *h_r = new float[padWidth * padHeight];
+    float *h_g = new float[padWidth * padHeight];
+    float *h_b = new float[padWidth * padHeight];
 
     // Copy data from imageData
-    for (int i=0; i<imageData->height; ++i) {
-        for (int j=0; j<imageData->width; ++j) {
-            h_r[i*imageData->width + j] = imageData->data[(i*imageData->width)*imageData->channels + j*imageData->channels + 0];
-            h_g[i*imageData->width + j] = imageData->data[(i*imageData->width)*imageData->channels + j*imageData->channels + 1];
-            h_b[i*imageData->width + j] = imageData->data[(i*imageData->width)*imageData->channels + j*imageData->channels + 2];
+    for (int i=0; i<padHeight; ++i) {
+        for (int j=0; j<padWidth; ++j) {
+            if(i<imageData->height && j<imageData->width) {
+                h_r[i*imageData->width + j] = imageData->data[(i*imageData->width)*imageData->channels + j*imageData->channels + 0];
+                h_g[i*imageData->width + j] = imageData->data[(i*imageData->width)*imageData->channels + j*imageData->channels + 1];
+                h_b[i*imageData->width + j] = imageData->data[(i*imageData->width)*imageData->channels + j*imageData->channels + 2];
+            }
+            else {
+                h_r[i*imageData->width + j] = 0;
+                h_g[i*imageData->width + j] = 0;
+                h_b[i*imageData->width + j] = 0;
+            }
         }
     }
 
@@ -203,7 +248,7 @@ void imageProcessing_BlockByBlock(ImageData* imageData) {
     float* d_g;
     float* d_b;
 
-    size_t size = sizeof(float) * imageData->width * imageData->height;
+    size_t size = sizeof(float) * padWidth * padHeight;
     cudaMalloc(&d_r, size);
     cudaMemcpy(d_r, h_r, size, cudaMemcpyHostToDevice);
     cudaMalloc(&d_g, size);
@@ -211,12 +256,12 @@ void imageProcessing_BlockByBlock(ImageData* imageData) {
     cudaMalloc(&d_b, size);
     cudaMemcpy(d_b, h_b, size, cudaMemcpyHostToDevice);
 
-    int widthBlockNum = imageData->width/BS;
-    int heightBlockNum = imageData->width/BS;
+    int widthBlockNum = padWidth/KERNEL_BS;
+    int heightBlockNum = padHeight/KERNEL_BS;
 
-    dim3 block_dim(8, 8, 1);
+    dim3 block_dim(KERNEL_BS, KERNEL_BS, 1);
     dim3 grid_dim(widthBlockNum, heightBlockNum, 1);
-    compress<<<grid_dim, block_dim>>>(d_r, d_g, d_b, imageData->width);
+    compress<<<grid_dim, block_dim>>>(d_r, d_g, d_b, padWidth);
 
     cudaMemcpy(h_r, d_r, size, cudaMemcpyDeviceToHost);
     cudaMemcpy(h_g, d_g, size, cudaMemcpyDeviceToHost);
@@ -232,11 +277,9 @@ void imageProcessing_BlockByBlock(ImageData* imageData) {
     }
 }
 
-using namespace std;
-
 int main()
 {
-    char srcName[30] = "large-candy.png";
+    char srcName[30] = "src.png";
     char dstName[30] = "out.png";
     ImageData imageData;
     read_png(srcName, &imageData);
