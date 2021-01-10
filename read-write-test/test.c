@@ -208,9 +208,9 @@ int main(int argc, char** argv) {
 
     // Write Image
     printf("Write: %s\n", dstName);
-    if (endsWith(srcName, ".png"))
+    if (endsWith(dstName, ".png"))
         write_png(dstName, &imageData);
-    else if (endsWith(srcName, ".jpg"))
+    else if (endsWith(dstName, ".jpg"))
         write_jpeg(dstName, &imageData, &jerr);
     else {
         printf("Error: failed to open %s\n", dstName);
