@@ -218,6 +218,9 @@ void yuv_to_rgb(float y[8][8], float u[8][8], float v[8][8], float r[8][8], floa
             r[i][j] = y[i][j] + 1.402 * (v[i][j] - 128);
             g[i][j] = y[i][j] - 0.34414 * (u[i][j] - 128) - 0.71414 * (v[i][j] - 128);
             b[i][j] = y[i][j] + 1.772 * (u[i][j] - 128);
+            // r[i][j] = y[i][j];
+            // g[i][j] = u[i][j];
+            // b[i][j] = v[i][j];
         }
     }
 }
@@ -242,8 +245,7 @@ void dct(float pic_in[8][8], float enc_out[8][8])
                     v_cs = cos(((2 * y + 1) * v * Pi) / 16);
                     if (v == 0)
                         v_cs = (1 / (sqrt(2)));
-                    enc_out[v][u] += 0.25 * pic_in[y][x];
-                    // enc_out[v][u] += 0.25 * pic_in[y][x] * u_cs * v_cs;
+                    enc_out[v][u] += 0.25 * pic_in[y][x] * u_cs * v_cs;
                 }
             }
         }
@@ -350,9 +352,9 @@ void imageProcessing_BlockByBlock(ImageData* imageData) {
             dct(b_out, b_in);
 
             // printf("3. Quantization...\n");
-            // quantize(r_in, r_out, 0);
-            // quantize(g_in, g_out, 1);
-            // quantize(b_in, b_out, 1);
+            quantize(r_in, r_out, 0);
+            quantize(g_in, g_out, 1);
+            quantize(b_in, b_out, 1);
 
             // if (i == 10 && j == 10) {
             //     printf("Check Compress Data:\n");
@@ -373,17 +375,17 @@ void imageProcessing_BlockByBlock(ImageData* imageData) {
             // }
 
             // printf("4. Dequantization...\n");
-            // dequantize(r_out, r_in, 0);
-            // dequantize(g_out, g_in, 1);
-            // dequantize(b_out, b_in, 1);
+            dequantize(r_out, r_in, 0);
+            dequantize(g_out, g_in, 1);
+            dequantize(b_out, b_in, 1);
 
             // // printf("5. Inv DCT...\n");
-            // inv_dct(r_in, r_out);
-            // inv_dct(g_in, g_out);
-            // inv_dct(b_in, b_out);
+            inv_dct(r_in, r_out);
+            inv_dct(g_in, g_out);
+            inv_dct(b_in, b_out);
 
             // // printf("6. Convert to RGB space...\n");
-            // yuv_to_rgb(r_out, g_out, b_out, r_in, g_in, b_in);
+            yuv_to_rgb(r_out, g_out, b_out, r_in, g_in, b_in);
 
             for (int x=0; x<8; ++x) {
                 for (int y=0; y<8; ++y) {

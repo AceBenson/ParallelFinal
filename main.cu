@@ -117,9 +117,9 @@ __constant__ float quv[8][8] = {{17, 18, 24, 47, 99, 99, 99, 99},
                   {99, 99, 99, 99, 99, 99, 99, 99}};
 
 __device__ void rgb_to_yuv(float R[][KERNEL_BS], float G[][KERNEL_BS], float B[][KERNEL_BS], int i, int j) {
-    int newR = 0.299   * R[i][j] + 0.587  * G[i][j] + 0.114  * B[i][j];
-    int newG = -0.1687 * R[i][j] - 0.3313 * G[i][j] + 0.5    * B[i][j] + 128;
-    int newB = 0.5     * R[i][j] - 0.4187 * G[i][j] - 0.0813 * B[i][j] + 128;
+    float newR = 0.299   * R[i][j] + 0.587  * G[i][j] + 0.114  * B[i][j];
+    float newG = -0.1687 * R[i][j] - 0.3313 * G[i][j] + 0.5    * B[i][j] + 128;
+    float newB = 0.5     * R[i][j] - 0.4187 * G[i][j] - 0.0813 * B[i][j] + 128;
     R[i][j] = newR;
     G[i][j] = newG;
     B[i][j] = newB;
@@ -130,8 +130,7 @@ __device__ void dct(float A[][KERNEL_BS], int i, int j) {
     float tmp = 0;
     for (x = 0; x < KERNEL_BS; x++) {
         for (y = 0; y < KERNEL_BS; y++) {
-            tmp += 0.25;
-            // tmp += 0.25 * A[y][x] * cos_lookup[x%BS][i%BS] * cos_lookup[y%BS][j%BS];
+            tmp += 0.25 * A[y][x] * cos_lookup[x%BS][i%BS] * cos_lookup[y%BS][j%BS];
         }
     }
     __syncthreads();
@@ -147,12 +146,15 @@ __device__ void quantize_uv(float A[][KERNEL_BS], int i, int j) {
 }
 
 __device__ void yuv_to_rgb(float R[][KERNEL_BS], float G[][KERNEL_BS], float B[][KERNEL_BS], int i, int j) {
-    int newR = R[i][j] + 1.402 * (B[i][j] - 128);
-    int newG = R[i][j] - 0.34414 * (G[i][j] - 128) - 0.71414 * (B[i][j] - 128);
-    int newB = R[i][j] + 1.772 * (G[i][j] - 128);
+    float newR = R[i][j] + 1.402 * (B[i][j] - 128);
+    float newG = R[i][j] - 0.34414 * (G[i][j] - 128) - 0.71414 * (B[i][j] - 128);
+    float newB = R[i][j] + 1.772 * (G[i][j] - 128);
     R[i][j] = newR;
     G[i][j] = newG;
     B[i][j] = newB;
+    // R[i][j] = R[i][j];
+    // G[i][j] = G[i][j];
+    // B[i][j] = B[i][j];
 }
 
 __device__ void inv_dct(float A[][KERNEL_BS], int i, int j) {
@@ -168,18 +170,18 @@ __device__ void inv_dct(float A[][KERNEL_BS], int i, int j) {
 }
 
 __device__ void dequantize_y(float A[][KERNEL_BS], int i, int j) {
-    A[i][j] = round(A[i][j] / qy[i%BS][j%BS]);
+    A[i][j] = round(A[i][j] * qy[i%BS][j%BS]);
+    // A[i][j] = 0;
 }
 
 __device__ void dequantize_uv(float A[][KERNEL_BS], int i, int j) {
-    A[i][j] = round(A[i][j] / quv[i%BS][j%BS]);
+    A[i][j] = round(A[i][j] * quv[i%BS][j%BS]);
+    // A[i][j] = 0;
 }
 
 __global__ void compress(float* r, float* g, float* b, int width) {
 
     // Start JPEG Compress
-    // int roundX = imageData->width/8;
-    // int roundY = imageData->height/8;
     
     __shared__ float R[KERNEL_BS][KERNEL_BS];
     __shared__ float G[KERNEL_BS][KERNEL_BS];
@@ -192,24 +194,27 @@ __global__ void compress(float* r, float* g, float* b, int width) {
     G[ti][tj] = g[width*(bidy*KERNEL_BS+ti) + bidx*KERNEL_BS+tj];
     B[ti][tj] = b[width*(bidy*KERNEL_BS+ti) + bidx*KERNEL_BS+tj];
     rgb_to_yuv(R, G, B, ti, tj);
+    __syncthreads();
     dct(R, ti, tj);
     dct(G, ti, tj);
     dct(B, ti, tj);
-    // quantize_y(R, ti, tj);
-    // quantize_uv(G, ti, tj);
-    // quantize_uv(B, ti, tj);
+    quantize_y(R, ti, tj);
+    quantize_uv(G, ti, tj);
+    quantize_uv(B, ti, tj);
+    // __syncthreads();
 
-    
-    // dequantize_y(R, ti, tj);
-    // dequantize_uv(G, ti, tj);
-    // dequantize_uv(B, ti, tj);
+    dequantize_y(R, ti, tj);
+    dequantize_uv(G, ti, tj);
+    dequantize_uv(B, ti, tj);
+    __syncthreads();
 
-    // inv_dct(R, ti, tj);
-    // inv_dct(G, ti, tj);
-    // inv_dct(B, ti, tj);
+    inv_dct(R, ti, tj);
+    inv_dct(G, ti, tj);
+    inv_dct(B, ti, tj);
+    __syncthreads();
 
-    // yuv_to_rgb(R, G, B, ti, tj);
-
+    yuv_to_rgb(R, G, B, ti, tj);
+    // __syncthreads();
     r[width*(bidy*KERNEL_BS+ti) + bidx*KERNEL_BS+tj] = R[ti][tj];
     g[width*(bidy*KERNEL_BS+ti) + bidx*KERNEL_BS+tj] = G[ti][tj];
     b[width*(bidy*KERNEL_BS+ti) + bidx*KERNEL_BS+tj] = B[ti][tj];
