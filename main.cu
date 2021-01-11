@@ -8,6 +8,8 @@
 #include <jpeglib.h>
 #include <assert.h>
 #include <string.h>
+#include <chrono>
+#include <ctime>
 
 #define KERNEL_BS 8
 #define BS 8
@@ -88,15 +90,15 @@ int read_png(const char* filename, ImageData* imageData) {
     return 0;
 }
 
-__constant__ float cos_lookup[8][8] = {
-    {0.707107, 0.980785, 0.923880, 0.831470, 0.707107, 0.555570, 0.382683, 0.195090},
-    {0.707107, 0.831470, 0.382683, -0.195090, -0.707107, -0.980785, -0.923880, -0.555570},
-    {0.707107, 0.555570, -0.382683, -0.980785, -0.707107, 0.195090, 0.923880, 0.831470},
-    {0.707107, 0.195090, -0.923880, -0.555570, 0.707107, 0.831470, -0.382683, -0.980785},
-    {0.707107, -0.195090, -0.923880, 0.555570, 0.707107, -0.831470, -0.382683, 0.980785},
-    {0.707107, -0.555570, -0.382683, 0.980785, -0.707107, -0.195090, 0.923880, -0.831470},
-    {0.707107, -0.831470, 0.382683, 0.195090, -0.707107, 0.980785, -0.923880, 0.555570},
-    {0.707107, -0.980785, 0.923880, -0.831470, 0.707107, -0.555570, 0.382683, -0.195}
+__constant__ double cos_lookup[8][8] = {
+    {0.707107,  0.980785,  0.923880,  0.831470,  0.707107,  0.555570,  0.382683,  0.195090},
+    {0.707107,  0.831470,  0.382683, -0.195090, -0.707107, -0.980785, -0.923880, -0.555570},
+    {0.707107,  0.555570, -0.382684, -0.980785, -0.707107,  0.195090,  0.923880,  0.831469},
+    {0.707107,  0.195090, -0.923880, -0.555570,  0.707107,  0.831469, -0.382684, -0.980785},
+    {0.707107, -0.195090, -0.923880,  0.555570,  0.707107, -0.831470, -0.382683,  0.980785},
+    {0.707107, -0.555570, -0.382683,  0.980785, -0.707107, -0.195090,  0.923879, -0.831470},
+    {0.707107, -0.831470,  0.382684,  0.195090, -0.707107,  0.980785, -0.923880,  0.555571},
+    {0.707107, -0.980785,  0.923880, -0.831470,  0.707107, -0.555571,  0.382684, -0.195092}
 };
 
 __constant__ float qy[8][8] = {{16, 11, 10, 16, 24, 40, 51, 61},
@@ -128,9 +130,11 @@ __device__ void rgb_to_yuv(float R[][KERNEL_BS], float G[][KERNEL_BS], float B[]
 __device__ void dct(float A[][KERNEL_BS], int i, int j) {
     int x, y;
     float tmp = 0;
+    // float u_cs, v_cs, Pi=3.1415927;
     for (x = 0; x < KERNEL_BS; x++) {
         for (y = 0; y < KERNEL_BS; y++) {
-            tmp += 0.25 * A[y][x] * cos_lookup[x%BS][i%BS] * cos_lookup[y%BS][j%BS];
+            tmp += 0.25 * A[y][x] * cos_lookup[x][i] * cos_lookup[y][j];
+            // tmp += 0.25 * A[y][x];
         }
     }
     __syncthreads();
@@ -138,11 +142,11 @@ __device__ void dct(float A[][KERNEL_BS], int i, int j) {
 }
 
 __device__ void quantize_y(float A[][KERNEL_BS], int i, int j) {
-    A[i][j] = round(A[i][j] / qy[i%BS][j%BS]);
+    A[i][j] = round(A[i][j] / qy[i][j]);
 }
 
 __device__ void quantize_uv(float A[][KERNEL_BS], int i, int j) {
-    A[i][j] = round(A[i][j] / quv[i%BS][j%BS]);
+    A[i][j] = round(A[i][j] / quv[i][j]);
 }
 
 __device__ void yuv_to_rgb(float R[][KERNEL_BS], float G[][KERNEL_BS], float B[][KERNEL_BS], int i, int j) {
@@ -152,17 +156,15 @@ __device__ void yuv_to_rgb(float R[][KERNEL_BS], float G[][KERNEL_BS], float B[]
     R[i][j] = newR;
     G[i][j] = newG;
     B[i][j] = newB;
-    // R[i][j] = R[i][j];
-    // G[i][j] = G[i][j];
-    // B[i][j] = B[i][j];
 }
 
 __device__ void inv_dct(float A[][KERNEL_BS], int i, int j) {
     int x, y;
-    int tmp = 0;
+    float tmp = 0;
     for (x = 0; x < KERNEL_BS; x++) {
         for (y = 0; y < KERNEL_BS; y++) {
             tmp += 0.25 * A[y][x] * cos_lookup[i%BS][x%BS] * cos_lookup[j%BS][y%BS];
+            // tmp += 0.25 * A[y][x];
         }
     }
     __syncthreads();
@@ -171,12 +173,10 @@ __device__ void inv_dct(float A[][KERNEL_BS], int i, int j) {
 
 __device__ void dequantize_y(float A[][KERNEL_BS], int i, int j) {
     A[i][j] = round(A[i][j] * qy[i%BS][j%BS]);
-    // A[i][j] = 0;
 }
 
 __device__ void dequantize_uv(float A[][KERNEL_BS], int i, int j) {
     A[i][j] = round(A[i][j] * quv[i%BS][j%BS]);
-    // A[i][j] = 0;
 }
 
 __global__ void compress(float* r, float* g, float* b, int width) {
@@ -252,7 +252,7 @@ void imageProcessing_BlockByBlock(ImageData* imageData) {
     float* d_r;
     float* d_g;
     float* d_b;
-
+    auto start_time = chrono::steady_clock::now();
     size_t size = sizeof(float) * padWidth * padHeight;
     cudaMalloc(&d_r, size);
     cudaMemcpy(d_r, h_r, size, cudaMemcpyHostToDevice);
@@ -261,16 +261,31 @@ void imageProcessing_BlockByBlock(ImageData* imageData) {
     cudaMalloc(&d_b, size);
     cudaMemcpy(d_b, h_b, size, cudaMemcpyHostToDevice);
 
+    auto end_time = chrono::steady_clock::now();
+    auto time_span = chrono::duration_cast<chrono::duration<double>>(end_time - start_time);
+    cout << "copy time: " << time_span.count() << endl;
+
     int widthBlockNum = padWidth/KERNEL_BS;
     int heightBlockNum = padHeight/KERNEL_BS;
 
     dim3 block_dim(KERNEL_BS, KERNEL_BS, 1);
     dim3 grid_dim(widthBlockNum, heightBlockNum, 1);
+    start_time = chrono::steady_clock::now();
     compress<<<grid_dim, block_dim>>>(d_r, d_g, d_b, padWidth);
+    cudaDeviceSynchronize();
+    end_time = chrono::steady_clock::now();
+    time_span = chrono::duration_cast<chrono::duration<double>>(end_time - start_time);
+    cout << "computation time: " << time_span.count() << endl;
 
+
+    start_time = chrono::steady_clock::now();
     cudaMemcpy(h_r, d_r, size, cudaMemcpyDeviceToHost);
     cudaMemcpy(h_g, d_g, size, cudaMemcpyDeviceToHost);
     cudaMemcpy(h_b, d_b, size, cudaMemcpyDeviceToHost);
+
+    end_time = chrono::steady_clock::now();
+    time_span = chrono::duration_cast<chrono::duration<double>>(end_time - start_time);
+    cout << "copy time: " << time_span.count() << endl;
 
     // // Copy Data back
     for (int i=0; i<imageData->height; ++i) {
@@ -282,12 +297,17 @@ void imageProcessing_BlockByBlock(ImageData* imageData) {
     }
 }
 
-int main()
+int main(int argc, char** argv)
 {
-    char srcName[30] = "src.png";
-    char dstName[30] = "out.png";
+    assert(argc == 3);
+    auto start_time = chrono::steady_clock::now();
+    char* srcName = argv[1];
+    char* dstName = argv[2];
     ImageData imageData;
     read_png(srcName, &imageData);
+    auto end_time = chrono::steady_clock::now();
+    auto time_span = chrono::duration_cast<chrono::duration<double>>(end_time - start_time);
+    cout << "read time: " << time_span.count() << endl;
 
     imageProcessing_BlockByBlock(&imageData);
 
@@ -296,7 +316,10 @@ int main()
     if( err != cudaSuccess ) {
         printf("CUDA Error: %s\n", cudaGetErrorString(err)); 
     }
-
+    start_time = chrono::steady_clock::now();
     write_png(dstName, &imageData);
+    end_time = chrono::steady_clock::now();
+    time_span = chrono::duration_cast<chrono::duration<double>>(end_time - start_time);
+    cout << "write time: " << time_span.count() << endl;
 
 }

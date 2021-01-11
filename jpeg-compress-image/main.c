@@ -218,9 +218,6 @@ void yuv_to_rgb(float y[8][8], float u[8][8], float v[8][8], float r[8][8], floa
             r[i][j] = y[i][j] + 1.402 * (v[i][j] - 128);
             g[i][j] = y[i][j] - 0.34414 * (u[i][j] - 128) - 0.71414 * (v[i][j] - 128);
             b[i][j] = y[i][j] + 1.772 * (u[i][j] - 128);
-            // r[i][j] = y[i][j];
-            // g[i][j] = u[i][j];
-            // b[i][j] = v[i][j];
         }
     }
 }
@@ -246,6 +243,7 @@ void dct(float pic_in[8][8], float enc_out[8][8])
                     if (v == 0)
                         v_cs = (1 / (sqrt(2)));
                     enc_out[v][u] += 0.25 * pic_in[y][x] * u_cs * v_cs;
+                    // enc_out[v][u] += 0.25 * pic_in[y][x];
                 }
             }
         }
@@ -272,6 +270,7 @@ void inv_dct(float enc_in[8][8], float rec_out[8][8])
                     if (v == 0)
                         v_cs = (1 / (sqrt(2)));
                     rec_out[y][x] += 0.25 * enc_in[v][u] * u_cs * v_cs;
+                    // rec_out[y][x] += 0.25 * enc_in[v][u];
                 }
             }
         }
