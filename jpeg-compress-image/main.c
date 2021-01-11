@@ -194,6 +194,16 @@ float q1[8][8] = {{17, 18, 24, 47, 99, 99, 99, 99},
                   {99, 99, 99, 99, 99, 99, 99, 99},
                   {99, 99, 99, 99, 99, 99, 99, 99},
                   {99, 99, 99, 99, 99, 99, 99, 99}};
+float cos_lookup[8][8] = {
+    {0.707107, 0.980785, 0.923880, 0.831470, 0.707107, 0.555570, 0.382683, 0.195090},
+    {0.707107, 0.831470, 0.382683, -0.195090, -0.707107, -0.980785, -0.923880, -0.555570},
+    {0.707107, 0.555570, -0.382683, -0.980785, -0.707107, 0.195090, 0.923880, 0.831470},
+    {0.707107, 0.195090, -0.923880, -0.555570, 0.707107, 0.831470, -0.382683, -0.980785},
+    {0.707107, -0.195090, -0.923880, 0.555570, 0.707107, -0.831470, -0.382683, 0.980785},
+    {0.707107, -0.555570, -0.382683, 0.980785, -0.707107, -0.195090, 0.923880, -0.831470},
+    {0.707107, -0.831470, 0.382683, 0.195090, -0.707107, 0.980785, -0.923880, 0.555570},
+    {0.707107, -0.980785, 0.923880, -0.831470, 0.707107, -0.555570, 0.382683, -0.195}
+};
 
 void rgb_to_yuv(float r[8][8], float g[8][8], float b[8][8], float y[8][8], float u[8][8], float v[8][8])
 {
@@ -236,13 +246,13 @@ void dct(float pic_in[8][8], float enc_out[8][8])
             {
                 for (y = 0; y < 8; y++)
                 {
-                    u_cs = cos(((2 * x + 1) * u * Pi) / 16); //WHY?
-                    if (u == 0)
-                        u_cs = (1 / (sqrt(2)));
-                    v_cs = cos(((2 * y + 1) * v * Pi) / 16);
-                    if (v == 0)
-                        v_cs = (1 / (sqrt(2)));
-                    enc_out[v][u] += 0.25 * pic_in[y][x] * u_cs * v_cs;
+                    // u_cs = cos(((2 * x + 1) * u * Pi) / 16); //WHY?
+                    // if (u == 0)
+                    //     u_cs = (1 / (sqrt(2)));
+                    // v_cs = cos(((2 * y + 1) * v * Pi) / 16);
+                    // if (v == 0)
+                    //     v_cs = (1 / (sqrt(2)));
+                    enc_out[v][u] += 0.25 * pic_in[y][x] * cos_lookup[x][u] * cos_lookup[y][v];
                 }
             }
         }
@@ -262,13 +272,13 @@ void inv_dct(float enc_in[8][8], float rec_out[8][8])
             {
                 for (v = 0; v < 8; v++)
                 {
-                    u_cs = cos(((2 * x + 1) * u * Pi) / 16);
-                    if (u == 0)
-                        u_cs = (1 / (sqrt(2)));
-                    v_cs = cos(((2 * y + 1) * v * Pi) / 16);
-                    if (v == 0)
-                        v_cs = (1 / (sqrt(2)));
-                    rec_out[y][x] += 0.25 * enc_in[v][u] * u_cs * v_cs;
+                    // u_cs = cos(((2 * x + 1) * u * Pi) / 16);
+                    // if (u == 0)
+                    //     u_cs = (1 / (sqrt(2)));
+                    // v_cs = cos(((2 * y + 1) * v * Pi) / 16);
+                    // if (v == 0)
+                    //     v_cs = (1 / (sqrt(2)));
+                    rec_out[y][x] += 0.25 * enc_in[v][u] * cos_lookup[x][u] * cos_lookup[y][v];
                 }
             }
         }
@@ -330,6 +340,7 @@ void imageProcessing_BlockByBlock(ImageData* imageData) {
     
     for (int i=0; i<roundY; ++i) {
         for (int j=0; j<roundX; ++j) {
+            // printf("%d %d\n", i, j);
             // Deal with 8*8 matrix
             float r_in[8][8], g_in[8][8], b_in[8][8];
             float r_out[8][8], g_out[8][8], b_out[8][8];
@@ -353,23 +364,23 @@ void imageProcessing_BlockByBlock(ImageData* imageData) {
             quantize(g_in, g_out, 1);
             quantize(b_in, b_out, 1);
 
-            if (i == 10 && j == 10) {
-                printf("Check Compress Data:\n");
-                for (int x=0; x<8; ++x) {
-                    for (int y=0; y<8; ++y) {
-                        printf("%6.1f ", r_out[x][y]);
-                    }
-                    printf("\t");
-                    for (int y=0; y<8; ++y) {
-                        printf("%6.1f ", g_out[x][y]);
-                    }
-                    printf("\t");
-                    for (int y=0; y<8; ++y) {
-                        printf("%6.1f ", b_out[x][y]);
-                    }
-                    printf("\n");
-                }
-            }
+            // if (i == 10 && j == 10) {
+            //     printf("Check Compress Data:\n");
+            //     for (int x=0; x<8; ++x) {
+            //         for (int y=0; y<8; ++y) {
+            //             printf("%6.1f ", r_out[x][y]);
+            //         }
+            //         printf("\t");
+            //         for (int y=0; y<8; ++y) {
+            //             printf("%6.1f ", g_out[x][y]);
+            //         }
+            //         printf("\t");
+            //         for (int y=0; y<8; ++y) {
+            //             printf("%6.1f ", b_out[x][y]);
+            //         }
+            //         printf("\n");
+            //     }
+            // }
 
             // printf("4. Dequantization...\n");
             dequantize(r_out, r_in, 0);
@@ -608,6 +619,9 @@ int main(int argc, char** argv) {
     char* srcName = argv[1];
     char* dstName = argv[2];
 
+    struct timespec start_time, end_time;
+    double elapsed;
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
     // Read Image
     printf("Read: %s\n", srcName);
     if (endsWith(srcName, ".png"))
@@ -618,12 +632,22 @@ int main(int argc, char** argv) {
         printf("Error: failed to open %s\n", srcName);
         return -1;
     }
+    clock_gettime(CLOCK_MONOTONIC, &end_time);
+    elapsed = (end_time.tv_sec - start_time.tv_sec);
+    elapsed += (end_time.tv_nsec - start_time.tv_nsec) / 1000000000.0;
+    printf("CPU Input Elapsed = %.2fs\n", elapsed);
 
     printf("Src Width: %d\n", imageData.width);
     printf("Src Height: %d\n", imageData.height);
 
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
     imageProcessing_BlockByBlock(&imageData);
+    clock_gettime(CLOCK_MONOTONIC, &end_time);
+    elapsed = (end_time.tv_sec - start_time.tv_sec);
+    elapsed += (end_time.tv_nsec - start_time.tv_nsec) / 1000000000.0;
+    printf("CPU Computing Elapsed = %.2fs\n", elapsed);
 
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
     // Write Image
     printf("Write: %s\n", dstName);
     if (endsWith(dstName, ".png"))
@@ -634,4 +658,8 @@ int main(int argc, char** argv) {
         printf("Error: failed to open %s\n", dstName);
         return -1;
     }
+    clock_gettime(CLOCK_MONOTONIC, &end_time);
+    elapsed = (end_time.tv_sec - start_time.tv_sec);
+    elapsed += (end_time.tv_nsec - start_time.tv_nsec) / 1000000000.0;
+    printf("CPU Output Elapsed = %.2fs\n", elapsed);
 }
